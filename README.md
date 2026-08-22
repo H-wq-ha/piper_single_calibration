@@ -10,8 +10,8 @@
 - RealSense 相机、Piper 机械臂（`piper_sdk`）
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install opencv-python pyrealsense2 numpy pyyaml matplotlib scipy piper_sdk
+python3 -m venv venv
+venv/bin/pip install opencv-python pyrealsense2 numpy pyyaml matplotlib scipy piper_sdk
 ```
 
 ## 使用步骤
@@ -19,7 +19,7 @@ python3 -m venv .venv
 1. **相机内参标定**（首次必做；标定板尺寸已按方格 13mm / 标定码 9mm 配置）：
 
    ```bash
-   .venv/bin/python intrinsics/main_capture.py
+   venv/bin/python intrinsics/main_capture.py
    ```
 
    画面显示 GOOD 时按**空格**保存（建议 10~20 张，覆盖不同角度/距离），按 **Q** 退出后自动标定，
@@ -28,8 +28,8 @@ python3 -m venv .venv
 2. **手眼标定**（二选一，根据相机安装方式）：
 
    ```bash
-   .venv/bin/python hand_eye_single.py              # 眼在手上：相机装在机械臂末端
-   .venv/bin/python hand_eye_single_eye_to_hand.py  # 眼在手外：相机固定，标定板装在末端
+   venv/bin/python hand_eye_single.py              # 眼在手上：相机装在机械臂末端
+   venv/bin/python hand_eye_single_eye_to_hand.py  # 眼在手外：相机固定，标定板装在末端
    ```
 
    - 程序自动连接 RealSense 与机械臂，画面显示 `POSE OK` 时按 **S** 采样
@@ -42,7 +42,7 @@ python3 -m venv .venv
 3. **结果可视化**：
 
    ```bash
-   .venv/bin/python test_calib.py
+   venv/bin/python test_calib.py
    ```
 
 ## 注意事项
