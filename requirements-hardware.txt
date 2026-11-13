@@ -1,0 +1,3 @@
+-r requirements.txt
+pyrealsense2>=2.55,<3
+piper_sdk>=0.6,<0.7

@@ -1,147 +1,38 @@
-# 开发日志 — piper_single_calibration
+# 关键修改日志
 
-> 记录时间:2026-08-06
-> 仅记录实际完成的工作
+本文件只记录已完成的关键改动；当前安装与操作命令统一见 [README](../README.md)。
 
----
+## 2026-11-13：清理本地标定数据与设备标识
 
-## 1. 项目概述
+- 清除本机已保存的标定照片和生成结果，移除采集元数据中的相机序列号。
+- 采集代码只记录相机流内参；将本地 `left_arm/` 会话目录加入忽略规则，避免误提交。
 
-松灵 Piper 机械臂手眼标定项目(单文件实现),RealSense 相机 + ChArUco 标定板(9×12,方格 13mm / 标定码 9mm,DICT_5X5_100),支持眼在手上 / 眼在手外两种布置。
+## 2026-10-24：新标定板与内参自动采集
 
-| 文件 | 作用 |
-|---|---|
-| `intrinsics/main_capture.py` | 相机内参标定(采集 + 自动标定) |
-| `hand_eye_single.py` | 眼在手上手眼标定 |
-| `hand_eye_single_eye_to_hand.py` | 眼在手外手眼标定 |
-| `test_calib.py` | 标定结果可视化(硬编码示例数据) |
-| `data/result/calibration.yaml` | 相机内参结果 |
+- 内参和手眼共用 Calib.io 新板定义：11 列×8 行、checker 18 mm、marker 13 mm，启用旧版排列以匹配项目 PDF。
+- 内参默认自动保存清晰、稳定且视角有变化的原始照片；支持暂停自动采集和空格手动保存。
+- 每次采集使用独立目录，记录相机流内参、板配置、角点和采集质量；仅标定模式支持选择具体批次。
+- 根据操作要求，每次成功启动采集后清理先前批次 PNG，保留元数据、内参和备份；仅标定模式不清理，并用互斥锁避免与另一轮内参程序冲突。
+- 内参导出增加逐帧 RMS、参数标准差和源图像记录，覆盖前备份旧结果，并拒绝混合分辨率图像。
 
----
+## 2026-10-21：清理测试程序与历史报告
 
-## 2. 环境搭建(已完成)
+- 删除旧结果可视化测试、重投影分析、120 张内参对比脚本，以及公开数据下载、批量评测和报告生成模块。
+- 删除多轮评测输出、研究图表、旧求解器快照和内参对比报告，合并重复实现说明、迁移说明和评测规范。
+- 命令入口收敛为 `capture` 和 `solve`，移除求解流程中的旧相邻对 SVD 对照；保留官方方法、运动退化诊断和会话误差统计。
+- 移除仅用于旧绘图程序的 Matplotlib 依赖；将 `output/` 加入忽略规则。
+- 文档保留 README 使用说明和本日志。保留原始图像、数据集、采集会话和既有标定 YAML。
 
-创建 `venv` 虚拟环境并安装最新依赖:
+## 2026-10-18：官方求解后端与持久化采集
 
-```bash
-python3 -m venv venv
-venv/bin/pip install opencv-python pyrealsense2 numpy pyyaml matplotlib scipy piper_sdk
-```
+- 手眼流程模块化，两个原入口分别进入眼在手上/眼在手外采集，共用离线求解流程。
+- 手眼求解替换为 OpenCV 官方实现，默认 Shah 联合标定；提供五种经典手眼方法及 Li，可显式使用开发集自动选择。
+- 固定 OpenCV 4.12.0.88、NumPy 2.2.6、SciPy 1.15.3；移除自写 Park、双四元数和 Huber 联合优化求解路径。
+- 采集按 S/V/T 分组，检查视觉质量、静止状态和反馈新鲜度，保存原始图像、配对位姿、角点 ID、时间戳、哈希及拒绝原因。
+- 导出 YAML/JSON 和逐帧统计，统一米制坐标；结果不自动覆盖物理标定参数。离线一致性结果不代表已完成实机精度验收。
 
-| 包 | 版本 |
-|---|---|
-| opencv-python | **5.0.0** |
-| numpy | 2.2.6 |
-| pyrealsense2 | 2.58.3 |
-| piper_sdk | 0.6.2 |
-| matplotlib / scipy | 3.10.9 / 1.15.3 |
+## 2026-08-06：初始硬件流程与兼容性修复
 
-实测验证过的兼容性事实:
-- numpy 2.2.6 与系统包 matplotlib 3.5.1 不兼容(导入即崩溃)、scipy 1.11.4 报警告 → 必须使用 venv
-- OpenCV 4.11 与 5.0 均已移除旧版 aruco API(`detectMarkers` / `interpolateCornersCharuco` / `calibrateCameraCharuco`)
-
----
-
-## 3. OpenCV 5.0 适配改造(已完成)
-
-### 3.1 重写 `intrinsics/main_capture.py`(新 aruco API)
-
-- `CharucoDetector.detectBoard` 替代 `detectMarkers` + `interpolateCornersCharuco`
-- `board.matchImagePoints` + `cv2.calibrateCamera` 替代 `calibrateCameraCharuco`
-- 新增 `--calibrate-only` 模式:跳过采集,直接用 `data/images/*.png` 标定(见第 5 节)
-
-两个手眼脚本的 aruco 部分本就使用新 API(`CharucoDetector` + `matchImagePoints`),无需改动。
-
-### 3.2 numpy 实现 AX=XB 手眼标定求解器(替换 `cv2.calibrateHandEye`)
-
-OpenCV 5.0 删除了 `cv2.calibrateHandEye`(仅保留 `CALIB_HAND_EYE_*` 常量),在两个手眼脚本的 `HandEyeCalibrator` 中实现了等价求解器:
-
-**算法**:相邻位姿对构造相对运动 `A_i = inv(T_g2b_i)·T_g2b_{i+1}`、`B_i = T_t2c_i·inv(T_t2c_{i+1})`,解 `AX = XB`:
-
-- 旋转:`R_A·R_X = R_X·R_B` 对 `vec(R_X)` 线性,堆叠成 `(I⊗R_A − R_Bᵀ⊗I)·vec(R_X) = 0`,SVD 取最小奇异值向量,再正交化到 SO(3)
-- 平移:`(R_A − I)·t_X = R_X·t_B − t_A`,最小二乘
-- 眼在手内传入 `T_gripper2base` 得 `X = T_cam2gripper`;眼在手外传入 `T_base2gripper`(取逆)得 `X = T_cam2base`
-
-**调试中修复的 3 个实现 bug**:
-
-| # | 问题 | 现象 | 修复 |
-|---|---|---|---|
-| 1 | A、B 相对运动方向混搭 | R 误差 ~150° | A、B 统一为 i→i+1 方向 |
-| 2 | `vec` 为列主序但 `reshape` 按行填充 | 结果等于转置 | `reshape(3, 3, order='F')` |
-| 3 | `Vh[-1]` 符号任意 | 噪声下 R 误差恰为 180° | SVD 正交化后 `det<0` 时整体取反(而非翻转单列) |
-
-**验证结果**:
-
-| 测试 | R 误差 | t 误差 |
-|---|---|---|
-| 合成真值 ×20 种子(眼在手上) | 1.7e-06° | 5e-16 m |
-| 合成真值 ×20 种子(眼在手外) | 1.2e-06° | 4e-16 m |
-| 加噪声(0.5mm + 0.2° 测量噪声) | 0.11° | 0.52 mm |
-
----
-
-## 4. 实机验证(已完成)
-
-### 4.1 定位并修复 `drawDetectedCornersCharuco` 断言错误(OpenCV 5.0 bug)
-
-**现象**:检测到标定板即报错:
-
-```
-error: (-215:Assertion failed) (_charucoCorners.total() == _charucoIds.total()) || _charucoIds.total() == 0
-```
-
-**根因**:OpenCV 5.0 将 charuco 角点形状从 4.x 的 `(N,1,2)` 改为 `(N,2)`,而 `drawDetectedCornersCharuco` 内部仍用 `total()` 比较:`(N,2)` 的 `total() = 2N` 永远不等于 `ids.total() = N`。实测确认角点/ids 数量本身无不一致(250 帧零不匹配)。
-
-**修复**:弃用该函数,手工 `cv2.circle` 画角点;`detect_charuco` 增加防御性截断(`min(len(corners), len(ids))`)。
-
-### 4.2 相机检验(RealSense D435I)
-
-| 项目 | 结果 |
-|---|---|
-| 彩色 / 深度流 | 640×480 @ 30.0 fps 稳定 |
-| 标定板检测(板距 29cm) | 250/250 帧,**88/88 角点**完整检出 |
-| 位姿估计 | 250/250 成功,板距 29±0 cm |
-| 设备内参 vs 标定内参 | fx 604.2 vs 604.1(一致) |
-
-关键结论:检测率取决于板距相机距离——约 1m 时 marker 仅 ~8px,检出率极低;约 30cm 时 marker ~28px,检测率 100%。
-
-### 4.3 机械臂控制测试(piper_sdk)
-
-- CAN 通信正常(can0,帧率 ~3270/s),平移运动可靠(到位误差 <1mm)
-- 观察到 RZ 旋转在 RZ≈93° 附近失败(疑似腕部关节限位),RX/RY 部分方向可用
-
----
-
-## 5. 内参标定(已完成)
-
-- 新增 `--calibrate-only` 模式:原流程自动标定步骤绑定在"按 Q 退出后",Ctrl+C 或关窗会导致标定不执行且无提示;该模式可直接用 `data/images/` 下已保存的照片标定,无需相机
-- 使用 `data/images/` 下 41 张已保存照片执行标定:
-
-```bash
-venv/bin/python intrinsics/main_capture.py --calibrate-only
-```
-
-**结果**(已保存至 `data/result/calibration.yaml`):
-
-| 项目 | 数值 |
-|---|---|
-| K | fx=604.1, fy=601.1, cx=340.8, cy=238.7 |
-| 畸变 | [0.083, 0.053, -0.007, 0.010, -0.555] |
-| 重投影误差 | **0.42 px** |
-
----
-
-## 6. 常用命令
-
-```bash
-# 内参标定(采集 + 自动标定)
-venv/bin/python intrinsics/main_capture.py
-# 内参标定(仅用已存照片)
-venv/bin/python intrinsics/main_capture.py --calibrate-only
-# 眼在手上标定
-venv/bin/python hand_eye_single.py
-# 眼在手外标定
-venv/bin/python hand_eye_single_eye_to_hand.py
-# 结果可视化
-venv/bin/python test_calib.py
-```
+- 完成 RealSense 相机、Piper CAN 通信和两种手眼布置的初始流程。
+- 内参检测改用 `CharucoDetector` 和 `matchImagePoints`，增加 `--calibrate-only`，支持用已保存图像重新标定。
+- 修复 ChArUco 角点绘制的形状兼容问题；当时使用的自写相邻对 SVD 求解器后续已替换并清理。

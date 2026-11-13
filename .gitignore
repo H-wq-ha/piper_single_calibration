@@ -3,5 +3,10 @@ venv/
 __pycache__/
 *.pyc
 data/images/
-docs/
+output/
 data/result/
+data/datasets/
+data/prepared/
+data/study_prepared/
+data/sessions/
+/left_arm/
